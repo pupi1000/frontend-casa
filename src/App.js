@@ -9,7 +9,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import html2canvas from 'html2canvas'; 
 import { FaBroom, FaUtensils, FaBath, FaTools, FaCheckCircle, FaCog, FaHistory, FaTrash, FaPlusCircle, FaLock, FaCalendarAlt, FaCamera } from "react-icons/fa";
 
-// --- TUS CLAVES ---
+// --- 1. CONFIGURACIÓN ---
 const firebaseConfig = {
   apiKey: "AIzaSyBJ25t7cGyyMGWfAP7Wbqk8GhI5blkamBg",
   authDomain: "calendariocasa-46be7.firebaseapp.com",
@@ -27,7 +27,7 @@ const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const messaging = getMessaging(app);
 
-// DATOS
+// --- 2. DATOS ---
 const usuarios = [
   { nombre: 'Dani', color: '#6C63FF', avatar: '👨‍💻' },
   { nombre: 'Mamá', color: '#FF6584', avatar: '👩‍❤️‍💋‍👩' },
@@ -36,7 +36,7 @@ const usuarios = [
 ];
 const diasSemana = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 
-// HORARIO
+// Horario Base
 const horarioDefault = {
   'Lavar Servicios': { 1: 'Pupi', 2: 'Mamá', 3: 'Dani', 4: 'Dani', 5: 'Pupi', 6: 'Pupi', 0: 'Mamá' },
   'Trapear Cocina': { 1: 'Pupi', 2: 'Mamá', 3: 'Dani', 4: 'Dani', 5: 'Pupi', 6: 'Pupi', 0: 'Mamá' },
@@ -49,12 +49,13 @@ const listaTareasComunes = Object.keys(horarioDefault);
 const containerVariants = { hidden: { opacity: 0 }, visible: { opacity: 1, transition: { staggerChildren: 0.1 } } };
 const itemVariants = { hidden: { y: 20, opacity: 0 }, visible: { y: 0, opacity: 1 } };
 
+// --- 3. APP PRINCIPAL ---
 function App() {
   const [usuarioActual, setUsuarioActual] = useState(null);
   const [diaActualIndex, setDiaActualIndex] = useState(new Date().getDay());
   const [tareasDeHoy, setTareasDeHoy] = useState([]);
   
-  // ESTADO VIVO
+  // ESTADO DEL HORARIO (Desde Firebase)
   const [horario, setHorario] = useState(horarioDefault);
 
   // States Login
@@ -71,11 +72,11 @@ function App() {
   const [enviando, setEnviando] = useState(false);
   const [calendarioRef, setCalendarioRef] = useState(null); 
 
-  // Edición
+  // Datos de Edición
   const [celdaEditando, setCeldaEditando] = useState({ tarea: '', dia: 0 });
   const [nuevoResponsable, setNuevoResponsable] = useState("");
   
-  // Acciones
+  // Datos de Tarea
   const [tareaSeleccionada, setTareaSeleccionada] = useState(null);
   const [asignarA, setAsignarA] = useState("Dani");
   const [tareaAsignar, setTareaAsignar] = useState(listaTareasComunes[0]);
@@ -86,15 +87,16 @@ function App() {
   const [miToken, setMiToken] = useState("");
   const [tokenMama, setTokenMama] = useState(localStorage.getItem('tokenMama') || "");
 
-  // 1. CARGA INICIAL
+  // --- EFECTOS ---
+
   useEffect(() => {
-    // A. HISTORIAL EN VIVO
+    // 1. Escuchar Historial
     const q = query(collection(db, "historial_tareas"), orderBy("fecha", "desc"), limit(20));
     const unsubHistorial = onSnapshot(q, (snap) => {
       setHistorial(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     });
 
-    // B. HORARIO EN VIVO
+    // 2. Escuchar Horario (Para sincronizar Admin -> Pupi)
     const docRef = doc(db, "configuracion", "horario_semanal");
     const unsubHorario = onSnapshot(docRef, (docSnap) => {
       if (docSnap.exists()) {
@@ -104,40 +106,28 @@ function App() {
       }
     });
 
-    // C. Escuchar mensajes en primer plano
     onMessage(messaging, (payload) => {
-      console.log("Mensaje recibido en primer plano:", payload);
       new Notification(payload.notification.title, { body: payload.notification.body });
     });
 
     return () => { unsubHistorial(); unsubHorario(); };
   }, []);
 
-  // 2. GENERAR TOKEN
   useEffect(() => {
     if (usuarioActual && VAPID_KEY) {
       Notification.requestPermission().then(permission => {
-        if (permission === 'granted') {
-           getToken(messaging, { vapidKey: VAPID_KEY })
-             .then((token) => {
-                console.log("Mi Token generado:", token);
-                setMiToken(token);
-             })
-             .catch((err) => console.error("Error obteniendo token:", err));
-        } else {
-            console.log("Permiso de notificaciones denegado");
-        }
+        if (permission === 'granted') getToken(messaging, { vapidKey: VAPID_KEY }).then(setMiToken).catch(console.error);
       });
     }
   }, [usuarioActual]);
 
-  // 3. CALCULAR TAREAS
+  // Calcular Tareas Pendientes
   useEffect(() => {
     if (usuarioActual && usuarioActual.nombre !== 'Admin') {
       const tareasPotenciales = [];
       
       for (const [nombre, asig] of Object.entries(horario)) {
-        let resp = asig[diaActualIndex];
+        let resp = asig[diaActualIndex]; 
         const soyYo = resp === usuarioActual.nombre;
         const esTodos = resp === 'Todos';
         const esBuchu = (resp === 'Buchu' || resp === 'Opcional') && usuarioActual.nombre === 'Mamá';
@@ -147,13 +137,10 @@ function App() {
         }
       }
 
-      // Filtro local simple (si el backend guarda fecha completa, esto funciona mejor comparando strings)
-      // Usaremos la fechaLegible del historial para comparar si contiene la fecha de hoy "dd/mm/yyyy"
-      const hoy = new Date().toLocaleDateString("es-BO", { timeZone: "America/La_Paz" });
-      
+      const hoyString = new Date().toLocaleDateString();
       const tareasHechasHoy = historial.filter(h => {
-        // h.fechaLegible suele ser "dd/mm/yyyy, hh:mm:ss" o similar. Buscamos si empieza con la fecha de hoy.
-        return h.fechaLegible && h.fechaLegible.includes(hoy) && h.quien === usuarioActual.nombre;
+        const fechaH = new Date(h.fecha).toLocaleDateString();
+        return fechaH === hoyString && h.quien === usuarioActual.nombre;
       }).map(h => h.tarea);
 
       const pendientes = tareasPotenciales.filter(t => !tareasHechasHoy.includes(t.nombre));
@@ -161,7 +148,7 @@ function App() {
     }
   }, [usuarioActual, diaActualIndex, horario, historial]);
 
-  // --- ACCIONES ---
+  // --- FUNCIONES ---
 
   const handleDescargarCalendario = async () => {
     const elemento = document.getElementById("calendario-div");
@@ -205,10 +192,10 @@ function App() {
         setModalAsignar(false);
         setComentario("");
       } else {
-        alert("Error del servidor (Intenta de nuevo).");
+        alert("Error del servidor.");
       }
     } catch (e) {
-      alert("⚠️ Servidor despertando (Render es gratis y lento). Intenta de nuevo en 30 segundos.");
+      alert("⚠️ El servidor se está despertando. Intenta de nuevo en 30 segs.");
     }
     setEnviando(false);
   };
@@ -216,6 +203,15 @@ function App() {
   const handleBorrar = async (id) => {
     if (!window.confirm("¿Borrar?")) return;
     try { await fetch(`${API_URL}/api/borrar-tarea/${id}`, { method: 'DELETE' }); } catch (e) {}
+  };
+
+  // Función corregida para el click del calendario
+  const clickCeldaCalendario = (tarea, dia, responsableActual) => {
+    if (usuarioActual.nombre === 'Admin') {
+        setCeldaEditando({ tarea, dia });
+        setNuevoResponsable(responsableActual || "Nadie");
+        setModalEditarCelda(true);
+    }
   };
 
   const guardarCambioHorario = async () => {
@@ -341,8 +337,7 @@ function App() {
                <div className="flex-grow-1">
                  <div className="d-flex justify-content-between">
                    <strong>{h.quien}</strong>
-                   {/* Aquí mostramos fechaLegible que ya viene con hora de Bolivia desde el Backend */}
-                   <small className="text-muted">{h.fechaLegible || "Reciente"}</small>
+                   <small className="text-muted">{h.fechaLegible}</small>
                  </div>
                  <div>Hizo: <strong style={{color: '#6C63FF'}}>{h.tarea}</strong></div>
                </div>
@@ -400,13 +395,7 @@ function App() {
                                 <tr key={nombreTarea} className="calendar-row">
                                     <td className="fw-bold bg-light">{nombreTarea}</td>
                                     {[1, 2, 3, 4, 5, 6, 0].map(dia => (
-                                        <td key={dia} onClick={() => {
-                                            if (usuarioActual.nombre === 'Admin') {
-                                                setCeldaEditando({ tarea: nombreTarea, dia });
-                                                setNuevoResponsable(dias[dia] || "Nadie");
-                                                setModalEditarCelda(true);
-                                            }
-                                        }}>
+                                        <td key={dia} onClick={() => clickCeldaCalendario(nombreTarea, dia, dias[dia])}>
                                             <div className={`calendar-cell ${usuarioActual.nombre === 'Admin' ? 'admin-mode' : ''}`}>
                                                 {dias[dia] || '-'}
                                             </div>
@@ -442,7 +431,7 @@ function App() {
         <Modal.Body className="p-4">
            <h5 className="mb-3">Configuración</h5>
            <label className="small text-muted">Mi Token</label>
-           <Form.Control className="custom-input mb-3 text-muted" readOnly value={miToken || "Cargando..."} />
+           <Form.Control className="custom-input mb-3 text-muted" readOnly value={miToken || "..."} />
            <label className="small text-muted">Token Mamá</label>
            <Form.Control className="custom-input mb-3" placeholder="Pegar..." value={tokenMama} onChange={e => {setTokenMama(e.target.value); localStorage.setItem('tokenMama', e.target.value)}} />
            <Button variant="secondary" className="w-100" onClick={() => setModalConfig(false)}>Cerrar</Button>
